@@ -1,0 +1,27 @@
+[project]
+name = "sc_zarr"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dask>=2026.7.1",
+    "distributed>=2026.7.1",
+    "duckdb>=1.5.5",
+    "numba>=0.57.0",
+    "numpy>=2.4.6",
+    "pandas>=3.0.5",
+    "polars>=1.43.2",
+    "scanpy>=1.9.6",
+    "scipy==1.16.3",
+    "xarray>=2026.7.0",
+    "zarr>=3.1.6",
+]
+
+[dependency-groups]
+dev = [
+    "deptry>=0.25.1",
+    "pre-commit>=4.6.2",
+]
+[tool.deptry.per_rule_ignores]
+DEP002 = ["distributed", "duckdb", "numba", "polars", "scipy", "xarray"]
