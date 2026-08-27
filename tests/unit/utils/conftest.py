@@ -7,7 +7,7 @@ from sc_zarr.utils.ingestion_zarr import ingest_h5ad
 
 @pytest.fixture
 def h5ad_file() -> str:
-    return "tests/data/df1e3368-67f5-49ce-92cd-fe4f13298b4f.h5ad"
+    return "tests/data/1d29777b-80c4-44ed-a6b2-e5431c074c34.h5ad"
 
 
 @pytest.fixture
