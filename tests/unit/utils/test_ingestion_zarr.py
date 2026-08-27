@@ -3,8 +3,6 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 from pandas.testing import assert_frame_equal
-
-# test_ingestion_zarr.py
 from scipy import sparse as sp
 
 

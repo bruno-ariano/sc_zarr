@@ -1,6 +1,6 @@
 import cloup
 
-from sc_zarr.cli.ingestion import ingest_h5ad
+from sc_zarr.cli.ingestion import ingest_h5ad_cli
 from sc_zarr.cli.run_qc import run_qc
 
 
@@ -12,7 +12,7 @@ def cli() -> None:
 
 
 def main() -> None:
-    cli.add_command(ingest_h5ad)
+    cli.add_command(ingest_h5ad_cli)
     cli.add_command(run_qc)
     cli()
 

@@ -13,5 +13,7 @@ def h5ad_file() -> str:
 @pytest.fixture
 def zarr_data(tmp_path: Path, h5ad_file: str) -> Path:
     zarr_path = tmp_path / "test.zarr"
+    # Use Click's parameter syntax: pass options as --input-h5ad ... --output-zarr ...
     ingest_h5ad(h5ad_file, str(zarr_path))
+    # Ensure the command completed successfully
     return zarr_path

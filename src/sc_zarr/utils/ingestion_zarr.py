@@ -2,17 +2,15 @@ import shutil
 from pathlib import Path
 
 import anndata as ad
-import cloup
 from loguru import logger
 
 ad.settings.allow_write_nullable_strings = True
 
 
 def ingest_h5ad(
-    input_h5ad: str | Path,
+    h5ad: str | Path,
     output_zarr: str | Path,
 ) -> None:
-    input_h5ad = Path(input_h5ad)
     output_zarr = Path(output_zarr)
 
     ad.settings.zarr_write_format = 3
@@ -22,7 +20,7 @@ def ingest_h5ad(
         logger.info(f"Removing existing zarr folder {output_zarr}")
         shutil.rmtree(output_zarr)
 
-    adata = ad.experimental.read_lazy(input_h5ad)
+    adata = ad.experimental.read_lazy(h5ad)
 
     logger.info(f"Loaded the corresponding anndata with dimension {adata.shape}")
 
