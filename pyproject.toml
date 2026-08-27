@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "sc_zarr"
 version = "0.1.0"
@@ -5,9 +9,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anndata>=0.12.6",
+    "click>=8.4.2",
+    "cloup>=3.1.0",
     "dask>=2026.7.1",
     "distributed>=2026.7.1",
     "duckdb>=1.5.5",
+    "loguru>=0.7.3",
     "numba>=0.57.0",
     "numpy>=2.4.6",
     "pandas>=3.0.5",
@@ -18,10 +26,31 @@ dependencies = [
     "zarr>=3.1.6",
 ]
 
-[dependency-groups]
-dev = [
-    "deptry>=0.25.1",
-    "pre-commit>=4.6.2",
-]
 [tool.deptry.per_rule_ignores]
 DEP002 = ["distributed", "duckdb", "numba", "polars", "scipy", "xarray"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sc_zarr"]
+
+[project.scripts]
+sc_zarr = "sc_zarr.main:main"
+
+[dependency-groups]
+lint = [
+    "deptry>=0.25.1",
+    "mypy>=2.3.1",
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.4",
+]
+test = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.mypy]
+disallow_untyped_defs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.deptry]
+known_first_party = ["sc_zarr"]

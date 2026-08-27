@@ -2,6 +2,8 @@ import shutil
 from pathlib import Path
 
 import anndata as ad
+import cloup
+from loguru import logger
 
 ad.settings.allow_write_nullable_strings = True
 
@@ -9,25 +11,20 @@ ad.settings.allow_write_nullable_strings = True
 def ingest_h5ad(
     input_h5ad: str | Path,
     output_zarr: str | Path,
-):
+) -> None:
     input_h5ad = Path(input_h5ad)
     output_zarr = Path(output_zarr)
-
-    print("\n# INGEST\n")
-    print(f"Input:  {input_h5ad}")
-    print(f"Output: {output_zarr}")
 
     ad.settings.zarr_write_format = 3
     ad.settings.auto_shard_zarr_v3 = True
 
     if output_zarr.exists():
-        print("Removing existing output...")
+        logger.info(f"Removing existing zarr folder {output_zarr}")
         shutil.rmtree(output_zarr)
 
     adata = ad.experimental.read_lazy(input_h5ad)
 
-    print("\nLoaded:")
-    print(adata)
+    logger.info(f"Loaded the corresponding anndata with dimension {adata.shape}")
 
     try:
         # -----------------------------------------------------
@@ -35,11 +32,11 @@ def ingest_h5ad(
         # -----------------------------------------------------
 
         if hasattr(adata.obs, "to_memory"):
-            print("\nLoading obs metadata into memory...")
+            logger.info("\nLoading obs metadata into memory...")
             adata.obs = adata.obs.to_memory()
 
         if hasattr(adata.var, "to_memory"):
-            print("Loading var metadata into memory...")
+            logger.info("Loading var metadata into memory...")
             adata.var = adata.var.to_memory()
 
         # -----------------------------------------------------
@@ -51,7 +48,7 @@ def ingest_h5ad(
         # -----------------------------------------------------
 
         if adata.raw is not None and hasattr(adata.raw.var, "to_memory"):
-            print("Loading raw.var metadata into memory...")
+            logger.info("Loading raw.var metadata into memory...")
 
             raw_adata = ad.AnnData(
                 X=adata.raw.X,
@@ -61,53 +58,20 @@ def ingest_h5ad(
 
             adata.raw = raw_adata
 
-        # -----------------------------------------------------
-        # Debug types
-        # -----------------------------------------------------
-
-        print("\nBefore writing:")
-        print("X:       ", type(adata.X))
-        print("obs:     ", type(adata.obs))
-        print("var:     ", type(adata.var))
-
         if adata.raw is not None:
-            print("raw.X:   ", type(adata.raw.X))
-            print("raw.var: ", type(adata.raw.var))
+            logger.debug("raw.X:   ", type(adata.raw.X))
+            logger.debug("raw.var: ", type(adata.raw.var))
 
         # -----------------------------------------------------
         # Write
         # -----------------------------------------------------
 
-        print("\nWriting Zarr...")
+        logger.info(f"Starting writing zarr in {output_zarr}...")
         adata.write_zarr(output_zarr)
+    except Exception as e:
+        logger.error(f"Failed to ingest the anndata caused by {e}")
+        raise
 
     finally:
         if adata.file is not None:
             adata.file.close()
-
-    print("\nIngest complete.")
-    print(f"Zarr written to: {output_zarr}")
-
-
-if __name__ == "__main__":
-    INPUT_H5AD = (
-        "/Users/bruno.ariano/projects/hello_world/sc_practice/"
-        "770a441b-b903-4d22-8873-09b1abfd797a.h5ad"
-    )
-
-    OUTPUT_ZARR = "/Users/bruno.ariano/projects/hello_world/sc_practice/pbmc_adata.zarr"
-
-    ingest_h5ad(
-        INPUT_H5AD,
-        OUTPUT_ZARR,
-    )
-
-
-import zarr
-
-root = zarr.open_group(OUTPUT_ZARR, mode="r")
-
-print("X format:", root["X"].attrs["encoding-type"])
-
-if "raw" in root and "X" in root["raw"]:
-    print("raw.X format:", root["raw"]["X"].attrs["encoding-type"])

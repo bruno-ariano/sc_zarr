@@ -1,18 +1,18 @@
 from pathlib import Path
 
 import anndata as ad
-import numpy as np
-import pandas as pd
+import click
+import cloup
 import scanpy as sc
 import zarr
 from dask.distributed import Client
+from loguru import logger
 
-from zarr_mad import add_mad_cell_qc, calculate_mad_limits
-from zarr_stats import (
+from sc_zarr.utils.zarr_stats import (
+    QcSource,
     add_dataframe_columns,
     add_qc_gene_sets,
     choose_qc_matrix,
-    get_gene_names,
 )
 
 # ============================================================
@@ -32,22 +32,10 @@ MAD_MIN_GROUP_SIZE = 100
 # Gene filtering remains a prevalence rule rather than MAD.
 MIN_CELLS_PER_GENE = 3
 
-
-# Optional technical grouping for cell QC.
-#
-# Examples:
-#
-# BATCH_KEY = "library_id"
-# COVARIATE_KEYS = ["pool"]
-#
-# or:
-#
-# BATCH_KEY = "batch"
-# COVARIATE_KEYS = ["pool"]
-#
 # If both are None/empty, MADs are calculated globally.
 BATCH_KEY = None
-COVARIATE_KEYS = []
+COVARIATE_KEYS: list[str] = []
+
 
 ZARR_PATH = Path("/Users/bruno.ariano/projects/hello_world/sc_practice/pbmc_adata.zarr")
 
@@ -62,7 +50,7 @@ ZARR_PATH = Path("/Users/bruno.ariano/projects/hello_world/sc_practice/pbmc_adat
 #     "counts"
 #     "raw"
 #     "X"
-QC_SOURCE = "auto"
+QC_SOURCE: QcSource = "auto"
 
 
 # Example QC thresholds.
@@ -72,21 +60,17 @@ QC_SOURCE = "auto"
 MIN_GENES = 200
 MAX_GENES = 10_000
 MAX_MT = 20
-MIN_CELLS_PER_GENE = 3
-# Number of MADs used to call a cell an outlier.
-MAD_N = 3.0
-
-# If batch/covariate grouping creates a group smaller than this,
-# use global MAD thresholds for that group instead.
-MAD_MIN_GROUP_SIZE = 100
-
-# Gene filtering remains a prevalence rule rather than MAD.
-MIN_CELLS_PER_GENE = 3
 
 
-def run_qc(zarr_path):
-    print("\n# QC\n")
-    print(f"Zarr: {zarr_path}")
+@cloup.option(
+    "--zarr-path",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to input zarr file",
+)
+def zarr_qc(zarr_path: Path) -> None:
+    logger.info("\n# QC\n")
+    logger.info(f"Zarr: {zarr_path}")
 
     # --------------------------------------------------------
     # Open Zarr
@@ -402,6 +386,6 @@ if __name__ == "__main__":
             client.dashboard_link,
         )
 
-        run_qc(ZARR_PATH)
+        zarr_qc(ZARR_PATH)
 
         print("\nDone. Closing Dask cluster.")
