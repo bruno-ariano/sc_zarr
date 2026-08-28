@@ -6,9 +6,9 @@ import anndata as ad
 import pandas as pd
 import zarr
 from dask.array import Array as DaskArray
+from loguru import logger
 
 QcSource: TypeAlias = Literal["auto", "counts", "raw", "X"]
-SelectedQcSource: TypeAlias = Literal["counts", "raw", "X"]
 
 # ============================================================
 # HELPERS
@@ -39,8 +39,8 @@ def _require_group(parent: zarr.Group, key: str) -> zarr.Group:
 def choose_qc_matrix(
     root: zarr.Group,
     main_var: pd.DataFrame,
-    qc_source: QcSource,
-) -> tuple[DaskArray, pd.DataFrame, SelectedQcSource]:
+    qc_source: str | None = "auto",
+) -> tuple[DaskArray, pd.DataFrame]:
     """Select the matrix used for QC.
 
     Returns
@@ -59,9 +59,7 @@ def choose_qc_matrix(
 
     Examples
     --------
-    >>> X_qc, qc_var, source = choose_qc_matrix(root, main_var, "auto")
-    >>> source
-    'counts'
+    >>> X_qc, qc_var = choose_qc_matrix(root, main_var, "auto")
     """
 
     # --------------------------------------------------------
@@ -80,7 +78,7 @@ def choose_qc_matrix(
 
         X_qc = ad.experimental.read_elem_lazy(layers["counts"])
 
-        return X_qc, main_var.copy(), "counts"
+        return X_qc, main_var.copy()
 
     if qc_source == "raw":
         if "raw" not in root or "X" not in _require_group(root, "raw"):
@@ -94,14 +92,14 @@ def choose_qc_matrix(
         # raw.X must be paired with raw.var
         qc_var: pd.DataFrame = ad.io.read_elem(raw["var"])
 
-        return X_qc, qc_var, "raw"
+        return X_qc, qc_var
 
     if qc_source == "X":
         print("QC source: X")
 
         X_qc = ad.experimental.read_elem_lazy(root["X"])
 
-        return X_qc, main_var.copy(), "X"
+        return X_qc, main_var.copy()
 
     if qc_source != "auto":
         raise ValueError(f"Unknown QC_SOURCE: {qc_source!r}")
@@ -117,7 +115,7 @@ def choose_qc_matrix(
 
             X_qc = ad.experimental.read_elem_lazy(layers["counts"])
 
-            return X_qc, main_var.copy(), "counts"
+            return X_qc, main_var.copy()
 
     if "raw" in root and "X" in _require_group(root, "raw"):
         print("QC source: raw.X")
@@ -127,13 +125,13 @@ def choose_qc_matrix(
 
         qc_var = ad.io.read_elem(raw["var"])
 
-        return X_qc, qc_var, "raw"
+        return X_qc, qc_var
 
     print("QC source: X")
 
     X_qc = ad.experimental.read_elem_lazy(root["X"])
 
-    return X_qc, main_var.copy(), "X"
+    return X_qc, main_var.copy()
 
 
 def get_gene_names(var: pd.DataFrame) -> pd.Series:
@@ -162,7 +160,9 @@ def get_gene_names(var: pd.DataFrame) -> pd.Series:
     return pd.Series(var.index.astype(str), index=var.index)
 
 
-def add_qc_gene_sets(var: pd.DataFrame) -> pd.DataFrame:
+def add_qc_gene_sets(
+    var: pd.DataFrame, gene_name_column: str | None = None
+) -> pd.DataFrame:
     """Add common human QC gene categories.
 
     Examples
@@ -172,8 +172,10 @@ def add_qc_gene_sets(var: pd.DataFrame) -> pd.DataFrame:
     >>> flagged.loc["MT-ND1", "mt"]
     True
     """
-
-    gene_names = get_gene_names(var)
+    if gene_name_column is not None:
+        gene_names = var[gene_name_column]
+    else:
+        gene_names = get_gene_names(var)
 
     # Human mitochondrial genes
     var["mt"] = gene_names.str.startswith(
@@ -199,8 +201,8 @@ def add_qc_gene_sets(var: pd.DataFrame) -> pd.DataFrame:
     print(f"  Hemoglobin:    {var['hb'].sum():,}")
 
     if var["mt"].sum() == 0:
-        print("\nWARNING: no mitochondrial genes detected.")
-        print("Check the gene-symbol column and species.")
+        logger.warning("\nWARNING: no mitochondrial genes detected.")
+        logger.warning("Check the gene-symbol column and species.")
 
     return var
 
