@@ -1,7 +1,7 @@
 import cloup
 
-from sc_zarr.cli.ingestion import ingest_h5ad_cli
-from sc_zarr.cli.run_qc import run_qc
+from sc_zarr.cli.ingestion import h5ad_zarr
+from sc_zarr.cli.run_qc import zarr_qc_filter, zarr_qc_plot
 
 
 @cloup.group(
@@ -12,8 +12,9 @@ def cli() -> None:
 
 
 def main() -> None:
-    cli.add_command(ingest_h5ad_cli)
-    cli.add_command(run_qc)
+    cli.add_command(h5ad_zarr)
+    cli.add_command(zarr_qc_plot)
+    cli.add_command(zarr_qc_filter)
     cli()
 
 

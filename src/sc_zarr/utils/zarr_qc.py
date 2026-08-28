@@ -1,16 +1,15 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import anndata as ad
-import click
-import cloup
+import pandas as pd
 import scanpy as sc
 import zarr
-from dask.distributed import Client
 from loguru import logger
 
+from sc_zarr.utils.plot_qc import plot_qc
 from sc_zarr.utils.zarr_stats import (
-    QcSource,
-    add_dataframe_columns,
+    # add_dataframe_columns,
     add_qc_gene_sets,
     choose_qc_matrix,
 )
@@ -19,94 +18,138 @@ from sc_zarr.utils.zarr_stats import (
 # CONFIG
 # ============================================================
 ad.settings.allow_write_nullable_strings = True
-# ============================================================
-# QC CONFIG
-# ============================================================
-# Number of MADs used to call a cell an outlier.
-MAD_N = 3.0
-
-# If batch/covariate grouping creates a group smaller than this,
-# use global MAD thresholds for that group instead.
-MAD_MIN_GROUP_SIZE = 100
-
-# Gene filtering remains a prevalence rule rather than MAD.
-MIN_CELLS_PER_GENE = 3
-
-# If both are None/empty, MADs are calculated globally.
-BATCH_KEY = None
-COVARIATE_KEYS: list[str] = []
 
 
-ZARR_PATH = Path("/Users/bruno.ariano/projects/hello_world/sc_practice/pbmc_adata.zarr")
+@dataclass()
+class ScZarrRunQc:
+    """Parameters for a QC run on a Zarr AnnData store.
 
-# Which matrix should be used for QC?
-#
-# "auto":
-#     1. layers["counts"] if present
-#     2. raw.X if present
-#     3. X otherwise
-#
-# You can also explicitly use:
-#     "counts"
-#     "raw"
-#     "X"
-QC_SOURCE: QcSource = "auto"
+    Examples
+    --------
+    >>> params = ScZarrRunQc(
+    ...     zarr_path=Path("data.zarr"),
+    ...     batch_key=None,
+    ...     covariate_keys=[],
+    ... )
+    >>> params.qc_source
+    'auto'
+    """
+
+    zarr_path: Path
+    batch_key: str | None
+    covariate_keys: list[str]
+    mad_n: float = 3
+    mad_min_group_size: int | None = 100
+    qc_source: str | None = "auto"
+    gene_name_column: str | None = None
+    output_dir: Path | None = None
 
 
-# Example QC thresholds.
-#
-# IMPORTANT:
-# These are not universal biological thresholds.
-MIN_GENES = 200
-MAX_GENES = 10_000
-MAX_MT = 20
+def resolve_output_dir(sczarr_run_qc: ScZarrRunQc) -> Path:
+    """Return the directory that receives QC outputs, creating it if needed.
+
+    Defaults to a ``<zarr name>_qc`` folder next to the Zarr store so the
+    store itself is never polluted with report files.
+
+    Examples
+    --------
+    >>> params = ScZarrRunQc(Path("/data/pbmc.zarr"), None, [])
+    >>> resolve_output_dir(params)
+    PosixPath('/data/pbmc_qc')
+    """
+    if sczarr_run_qc.output_dir is not None:
+        output_dir = Path(sczarr_run_qc.output_dir)
+    else:
+        zarr_path = Path(sczarr_run_qc.zarr_path)
+        output_dir = zarr_path.parent / f"{zarr_path.stem}_qc"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return output_dir
 
 
-@cloup.option(
-    "--zarr-path",
-    required=True,
-    type=click.Path(exists=True),
-    help="Path to input zarr file",
-)
-def zarr_qc(zarr_path: Path) -> None:
+def attach_grouping_column(
+    obs_qc: pd.DataFrame,
+    main_obs: pd.DataFrame,
+    batch_key: str | None,
+) -> pd.DataFrame:
+    """Copy a grouping column from the original obs table onto the QC metrics.
+
+    Examples
+    --------
+    >>> obs_qc = pd.DataFrame({"total_counts": [10, 20]}, index=["c1", "c2"])
+    >>> main_obs = pd.DataFrame({"batch": ["a", "b"]}, index=["c1", "c2"])
+    >>> attach_grouping_column(obs_qc, main_obs, "batch")["batch"].tolist()
+    ['a', 'b']
+    """
+    if batch_key is None:
+        return obs_qc
+
+    if batch_key not in main_obs.columns:
+        available = ", ".join(map(str, main_obs.columns))
+        raise KeyError(
+            f"Batch key {batch_key!r} is not a column of obs. Available: {available}"
+        )
+
+    plot_obs = obs_qc.copy()
+    plot_obs[batch_key] = main_obs[batch_key].reindex(plot_obs.index)
+
+    return plot_obs
+
+
+def zarr_qc_plot(sczarr_run_qc: ScZarrRunQc) -> Path:
+    """Calculate cell and gene QC metrics and plot them as a PNG.
+
+    No cell is filtered here. The metric tables are written next to the PNG so
+    the later filtering step can reuse them without recomputing.
+
+    Returns
+    -------
+    pathlib.Path
+        Path of the saved QC summary PNG.
+
+    Examples
+    --------
+    >>> zarr_qc_plot(ScZarrRunQc(zarr_path=Path("data.zarr"), batch_key=None, covariate_keys=[]))
+    PosixPath('data_qc/qc_plots.png')
+    """
     logger.info("\n# QC\n")
-    logger.info(f"Zarr: {zarr_path}")
+    logger.info(f"Zarr: {sczarr_run_qc.zarr_path}")
 
     # --------------------------------------------------------
     # Open Zarr
     # --------------------------------------------------------
 
     root = zarr.open_group(
-        zarr_path,
+        sczarr_run_qc.zarr_path,
         mode="r",
     )
 
-    # obs and var are small metadata tables.
+    # obs and var are small metadata tables that I can read in memory.
     main_obs = ad.io.read_elem(root["obs"])
 
     main_var = ad.io.read_elem(root["var"])
 
-    print()
-    print(f"Main AnnData: {len(main_obs):,} cells x {len(main_var):,} genes")
+    logger.info(f"Main AnnData: {len(main_obs):,} cells x {len(main_var):,} genes")
 
     # --------------------------------------------------------
     # Select counts matrix
     # --------------------------------------------------------
-
-    X_qc, qc_var, source = choose_qc_matrix(
+    # We can choose the expressionmatrix to use for QC and its associated var table based on the user's input.
+    X_qc, var_qc = choose_qc_matrix(
         root,
         main_var,
-        QC_SOURCE,
+        sczarr_run_qc.qc_source,
     )
 
-    print("\nLazy QC matrix:")
-    print(X_qc)
+    logger.info("\nLazy QC matrix:")
+    logger.info(X_qc)
 
-    print("\nChunks:")
-    print(X_qc.chunks)
+    logger.info("\nChunks:")
+    logger.info(X_qc.chunks)
 
-    print("\nSparse chunk type:")
-    print(type(X_qc._meta))
+    logger.info("\nSparse chunk type:")
+    logger.info(type(X_qc._meta))
 
     # --------------------------------------------------------
     # Sanity checks
@@ -118,38 +161,40 @@ def zarr_qc(zarr_path: Path) -> None:
             f"{X_qc.shape[0]} != {len(main_obs)}"
         )
 
-    if X_qc.shape[1] != len(qc_var):
+    if X_qc.shape[1] != len(var_qc):
         raise ValueError(
             "QC matrix gene count does not match its var: "
-            f"{X_qc.shape[1]} != {len(qc_var)}"
+            f"{X_qc.shape[1]} != {len(var_qc)}"
         )
 
     # --------------------------------------------------------
     # Gene categories
     # --------------------------------------------------------
-
-    qc_var = add_qc_gene_sets(qc_var.copy())
+    logger.info("\nAdding QC gene sets...")
+    var_qc = add_qc_gene_sets(
+        var_qc.copy(), gene_name_column=sczarr_run_qc.gene_name_column
+    )
 
     # --------------------------------------------------------
     # Temporary AnnData used only for QC
     #
     # X remains lazy / Dask-backed.
     # --------------------------------------------------------
-
+    logger.info("\nCreating temporary AnnData for QC...")
     adata_qc = ad.AnnData(
         X=X_qc,
         obs=main_obs.copy(),
-        var=qc_var,
+        var=var_qc,
     )
 
-    print("\nQC AnnData:")
-    print(adata_qc)
+    logger.info("\nQC AnnData:")
+    logger.info(adata_qc)
 
     # --------------------------------------------------------
     # Calculate metrics
     # --------------------------------------------------------
 
-    print("\nCalculating QC metrics...")
+    logger.info("\nCalculating QC metrics...")
 
     obs_qc, var_qc_results = sc.pp.calculate_qc_metrics(
         adata_qc,
@@ -165,7 +210,7 @@ def zarr_qc(zarr_path: Path) -> None:
         inplace=False,
     )
 
-    print("QC calculation complete.")
+    logger.info("QC calculation complete.")
 
     # --------------------------------------------------------
     # Cell QC
@@ -173,219 +218,27 @@ def zarr_qc(zarr_path: Path) -> None:
     # These always belong to main obs because the observation
     # axis is shared.
     # --------------------------------------------------------
+    output_dir = resolve_output_dir(sczarr_run_qc)
 
-    add_dataframe_columns(
-        main_obs,
+    obs_qc.to_csv(output_dir / "obs_qc.csv")
+    var_qc_results.to_csv(output_dir / "var_qc_results.csv")
+
+    logger.info(f"\nQC tables written to {output_dir}")
+
+    # `calculate_qc_metrics` only returns the calculated metrics, so the
+    # grouping column has to be taken back from the original obs table.
+    plot_obs = attach_grouping_column(
         obs_qc,
-    )
-
-    # --------------------------------------------------------
-    # Cell pass/fail flag
-    # --------------------------------------------------------
-
-    main_obs["pass_qc"] = (
-        (main_obs["n_genes_by_counts"] >= MIN_GENES)
-        & (main_obs["n_genes_by_counts"] <= MAX_GENES)
-        & (main_obs["pct_counts_mt"] <= MAX_MT)
-    )
-
-    # --------------------------------------------------------
-    # Gene QC
-    #
-    # var_qc_results corresponds to whichever var was paired
-    # with the QC matrix.
-    # --------------------------------------------------------
-
-    qc_var_output = qc_var.copy()
-
-    add_dataframe_columns(
-        qc_var_output,
-        var_qc_results,
-    )
-
-    qc_var_output["pass_qc"] = qc_var_output["n_cells_by_counts"] >= MIN_CELLS_PER_GENE
-
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
-
-    print("\n# CELL QC SUMMARY\n")
-
-    print(
-        main_obs[
-            [
-                "total_counts",
-                "n_genes_by_counts",
-                "pct_counts_mt",
-                "pct_counts_ribo",
-                "pct_counts_hb",
-            ]
-        ].describe(
-            percentiles=[
-                0.01,
-                0.05,
-                0.50,
-                0.95,
-                0.99,
-            ]
-        )
-    )
-
-    print("\n# GENE QC SUMMARY\n")
-
-    print(
-        qc_var_output[
-            [
-                "total_counts",
-                "n_cells_by_counts",
-                "mean_counts",
-            ]
-        ].describe(
-            percentiles=[
-                0.01,
-                0.05,
-                0.50,
-                0.95,
-                0.99,
-            ]
-        )
-    )
-
-    print(f"\nCells passing QC: {main_obs['pass_qc'].sum():,} / {len(main_obs):,}")
-
-    print(
-        f"Genes passing QC: {qc_var_output['pass_qc'].sum():,} / {len(qc_var_output):,}"
-    )
-
-    # ========================================================
-    # DECIDE WHERE GENE QC BELONGS
-    # ========================================================
-
-    write_raw_var = False
-
-    if source in {"X", "counts"}:
-        # X and layers always use the main AnnData var.
-        main_var_output = main_var.copy()
-
-        add_dataframe_columns(
-            main_var_output,
-            qc_var_output,
-        )
-
-    elif source == "raw":
-        # raw.X belongs to raw.var.
-        #
-        # If raw.var and main var contain exactly the same genes,
-        # we also copy QC metrics into the main var for convenience.
-        same_gene_index = len(main_var) == len(qc_var_output) and main_var.index.equals(
-            qc_var_output.index
-        )
-
-        print(
-            "\nraw.var matches main var:",
-            same_gene_index,
-        )
-
-        if same_gene_index:
-            main_var_output = main_var.copy()
-
-            add_dataframe_columns(
-                main_var_output,
-                qc_var_output,
-            )
-
-            print("Gene QC metrics will be stored in both var and raw.var.")
-
-        else:
-            main_var_output = main_var.copy()
-
-            print("raw.var differs from main var.")
-            print("Gene QC metrics will only be stored in raw.var.")
-
-        write_raw_var = True
-
-    else:
-        raise RuntimeError(f"Unexpected QC source: {source}")
-
-    # ========================================================
-    # WRITE METADATA BACK
-    # ========================================================
-
-    print("\nSaving QC metadata...")
-
-    # Reopen writable, bypassing possibly stale consolidated
-    # metadata while editing.
-    root_write = zarr.open_group(
-        zarr_path,
-        mode="a",
-        use_consolidated=False,
-    )
-
-    # --------------------------------------------------------
-    # obs
-    # --------------------------------------------------------
-
-    ad.io.write_elem(
-        root_write,
-        "obs",
         main_obs,
+        sczarr_run_qc.batch_key,
     )
 
-    # --------------------------------------------------------
-    # main var
-    # --------------------------------------------------------
-
-    ad.io.write_elem(
-        root_write,
-        "var",
-        main_var_output,
+    png_path = plot_qc(
+        plot_obs,
+        output_dir / "qc_plots.png",
+        sczarr_run_qc.batch_key,
     )
 
-    # --------------------------------------------------------
-    # raw.var if QC was calculated from raw.X
-    #
-    # raw.X itself is untouched.
-    # --------------------------------------------------------
+    logger.info(f"QC plot written to {png_path}")
 
-    if write_raw_var:
-        ad.io.write_elem(
-            root_write["raw"],
-            "var",
-            qc_var_output,
-        )
-
-    # --------------------------------------------------------
-    # Refresh consolidated metadata
-    # --------------------------------------------------------
-
-    print("Consolidating Zarr metadata...")
-
-    zarr.consolidate_metadata(root_write.store)
-
-    print("\nQC metadata saved.")
-    print("Expression matrices were not rewritten.")
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-if __name__ == "__main__":
-    # One local Dask worker.
-    #
-    # processes=False is convenient on macOS and avoids
-    # multiprocessing spawn complications.
-    with Client(
-        n_workers=1,
-        threads_per_worker=4,
-        processes=False,
-        memory_limit="8GB",
-    ) as client:
-        print(
-            "Dask dashboard:",
-            client.dashboard_link,
-        )
-
-        zarr_qc(ZARR_PATH)
-
-        print("\nDone. Closing Dask cluster.")
+    return png_path

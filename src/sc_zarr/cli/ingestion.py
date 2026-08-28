@@ -27,16 +27,15 @@ class ScZarrIngestion:
         logger.info("Ingestion completed")
 
 
-@cloup.command(name="ingest-h5ad")
+@cloup.command(help="Ingest h5ad file into Zarr v3 format")
 @cloup.option("--h5ad", type=str, help="Input h5ad file")
 @cloup.option("--output_zarr", type=str, help="Output zarr file")
-def ingest_h5ad_cli(
+def h5ad_zarr(
     h5ad: Path | None,
-    out_zarr: Path | None,
+    output_zarr: Path | None,
 ) -> None:
     processor = ScZarrIngestion(
         h5ad=h5ad,
-        out_zarr=out_zarr,
+        out_zarr=output_zarr,
     )
-
     processor.run()
